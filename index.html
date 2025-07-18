@@ -793,7 +793,7 @@
     <div id="tooltip" class="tooltip" style="display: none;"></div>
 
     <script>
-        // ★★★ ここにStep 3でコピーしたウェブアプリURLを設定 ★★★
+        // ★★★ ここに実際のApps Script URLを設定 ★★★
         const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwZvJbWEzmydplvRmuoA_6Gi87CYEMF5no9RarhytZeevoUOpXAf3Ygn29wY20U3piynw/exec';
         
         const startiaTemplate = [
@@ -1699,12 +1699,12 @@
             }
         }
         
-        // ==================== チーム共有機能（CORS対応版） ====================
+        // ==================== チーム共有機能（★完全CORS対応版★） ====================
         
         async function checkConnection() {
             try {
                 updateConnectionStatus('loading', '接続確認中...');
-                const response = await fetch(`${APPS_SCRIPT_URL}?action=ping`, {
+                const response = await fetch(`${APPS_SCRIPT_URL}?action=list`, {
                     method: 'GET',
                     mode: 'cors', // ★ CORS対応
                     headers: {
