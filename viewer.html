@@ -98,16 +98,6 @@
             color: white;
         }
         
-        .btn-primary {
-            background: #007bff;
-            color: white;
-        }
-        
-        .btn-warning {
-            background: #ffc107;
-            color: #212529;
-        }
-        
         /* ガントチャート用スタイル */
         .gantt-container {
             padding: 20px;
@@ -401,17 +391,8 @@
             display: block;
         }
         
-        .export-section {
-            padding: 30px;
-            background: #f8f9fa;
-            border-top: 2px solid #e9ecef;
-            display: flex;
-            gap: 15px;
-            flex-wrap: wrap;
-        }
-        
         @media print {
-            .controls, .export-section, .scroll-controls {
+            .controls, .scroll-controls {
                 display: none !important;
             }
             
@@ -502,104 +483,390 @@
                 </div>
             </div>
         </div>
-        
-        <div class="export-section">
-            <button class="btn btn-primary" onclick="exportToCSV()">📊 CSV出力</button>
-            <button class="btn btn-warning" onclick="exportToJSON()">📄 JSONエクスポート</button>
-        </div>
     </div>
     
     <div id="tooltip" class="tooltip" style="display: none;"></div>
 
-  <script>
-    // ★★★ URLパラメータから自動データ読み込み ★★★
-    let projectData = {};
-    
-    function loadDataFromURL() {
-        const urlParams = new URLSearchParams(window.location.search);
-        const encodedData = urlParams.get('data');
+    <script>
+        // ★★★ URLパラメータからスケジュールデータを自動取得 ★★★
+        function getProjectDataFromURL() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const encodedData = urlParams.get('data');
+            
+            if (encodedData) {
+                try {
+                    const decodedData = decodeURIComponent(atob(encodedData));
+                    return JSON.parse(decodedData);
+                } catch (error) {
+                    console.error('データの解析に失敗しました:', error);
+                    return null;
+                }
+            }
+            return null;
+        }
         
-        if (encodedData) {
-            try {
-                // Base64デコード
-                const decodedData = JSON.parse(decodeURIComponent(atob(encodedData)));
-                projectData = decodedData;
-                return true;
-            } catch (error) {
-                console.error('データの読み込みに失敗しました:', error);
-                return false;
+        // URLからデータを取得、なければ空のデータを設定
+        const projectData = getProjectDataFromURL() || {
+            projectName: 'データが設定されていません',
+            clientName: '編集用ツールでURLを生成してください',
+            assignee: '未設定',
+            tasks: [],
+            weekendBuffer: false
+        };
+        
+        let tasks = [];
+        let weekendBuffer = false;
+        let ganttStartDate = null;
+        let ganttEndDate = null;
+        const DAY_WIDTH = 35;
+        const DAY_WIDTH_PDF = 11;
+        let isPdfMode = false;
+        
+        function init() {
+            if (projectData && projectData.tasks && projectData.tasks.length > 0) {
+                tasks = projectData.tasks || [];
+                weekendBuffer = projectData.weekendBuffer || false;
+                
+                // プロジェクト情報を表示
+                document.getElementById('viewerProjectName').textContent = `📅 ${projectData.projectName || 'Webサイト制作スケジュール'}`;
+                document.getElementById('viewerClientInfo').textContent = `${projectData.clientName || 'お客様'} 専用 - 閲覧モード`;
+                
+                calculateGanttDateRange();
+                updateDisplay();
+            } else {
+                document.getElementById('viewerProjectName').textContent = 'データが設定されていません';
+                document.getElementById('viewerClientInfo').textContent = '編集用ツールで「顧客共有URL生成」ボタンを使用してください';
+                
+                // エラーメッセージを表示
+                const ganttTimelineArea = document.getElementById('ganttTimelineArea');
+                ganttTimelineArea.innerHTML = `
+                    <div style="padding: 40px; text-align: center; color: #6c757d;">
+                        <h3>🔧 データが設定されていません</h3>
+                        <p style="margin-top: 20px;">
+                            編集用ツールで「顧客共有URL生成」ボタンを使用して<br>
+                            正しいURLを生成してください。
+                        </p>
+                    </div>
+                `;
             }
         }
-        return false;
-    }
-    
-    // デフォルトデータ（URLパラメータがない場合）
-    function setDefaultData() {
-        projectData = {
-            "projectName": "サンプルプロジェクト",
-            "clientName": "○○株式会社",
-            "assignee": "松村謙吾",
-            "tasks": [
-                {
-                    "id": 1,
-                    "name": "【第1回目MTG】TOPデザインの確認・スケジュールの確定",
-                    "assignee": "貴社/ST",
-                    "duration": 1,
-                    "startDate": "2025-01-20",
-                    "endDate": "2025-01-20",
-                    "completed": false,
-                    "isParallel": false
-                },
-                {
-                    "id": 2,
-                    "name": "デザイン作成",
-                    "assignee": "ST",
-                    "duration": 7,
-                    "startDate": "2025-01-21",
-                    "endDate": "2025-01-29",
-                    "completed": false,
-                    "isParallel": false
-                }
-            ],
-            "projectStartDate": "2025-01-20",
-            "weekendBuffer": false,
-            "exportDate": "2025-01-15T10:00:00.000Z"
-        };
-    }
-    
-    let tasks = [];
-    let weekendBuffer = false;
-    let ganttStartDate = null;
-    let ganttEndDate = null;
-    const DAY_WIDTH = 35;
-    const DAY_WIDTH_PDF = 11;
-    let isPdfMode = false;
-    
-    function init() {
-        // URLパラメータからデータを読み込み
-        if (!loadDataFromURL()) {
-            setDefaultData();
+        
+        function togglePdfMode() {
+            isPdfMode = !isPdfMode;
+            const pdfModeBtn = document.getElementById('pdfModeBtn');
+            const pdfNotice = document.getElementById('pdfNotice');
+            
+            if (isPdfMode) {
+                pdfModeBtn.textContent = '📱 通常表示に戻る';
+                pdfModeBtn.style.background = '#28a745';
+                pdfNotice.classList.add('active');
+                
+                document.getElementById('ganttScrollWrapper').classList.add('pdf-mode');
+                document.getElementById('ganttContent').classList.add('pdf-mode');
+                document.getElementById('ganttLeftColumn').classList.add('pdf-mode');
+                document.getElementById('ganttRightColumn').classList.add('pdf-mode');
+                document.getElementById('ganttTasksLeft').classList.add('pdf-mode');
+                document.getElementById('ganttTimelineArea').classList.add('pdf-mode');
+                document.getElementById('ganttDatesHeader').classList.add('pdf-mode');
+                
+            } else {
+                pdfModeBtn.textContent = '📄 PDF出力用表示';
+                pdfModeBtn.style.background = '#dc3545';
+                pdfNotice.classList.remove('active');
+                
+                document.getElementById('ganttScrollWrapper').classList.remove('pdf-mode');
+                document.getElementById('ganttContent').classList.remove('pdf-mode');
+                document.getElementById('ganttLeftColumn').classList.remove('pdf-mode');
+                document.getElementById('ganttRightColumn').classList.remove('pdf-mode');
+                document.getElementById('ganttTasksLeft').classList.remove('pdf-mode');
+                document.getElementById('ganttTimelineArea').classList.remove('pdf-mode');
+                document.getElementById('ganttDatesHeader').classList.remove('pdf-mode');
+            }
+            
+            updateDisplay();
         }
         
-        if (projectData && projectData.tasks) {
-            tasks = projectData.tasks || [];
-            weekendBuffer = projectData.weekendBuffer || false;
+        function calculateGanttDateRange() {
+            if (tasks.length === 0) {
+                ganttStartDate = null;
+                ganttEndDate = null;
+                return;
+            }
             
-            // プロジェクト情報を表示
-            document.getElementById('viewerProjectName').textContent = projectData.projectName || 'Webサイト制作スケジュール';
-            document.getElementById('viewerClientInfo').textContent = (projectData.clientName || 'お客様') + ' 専用スケジュール（閲覧用）';
+            const validTasks = tasks.filter(task => task.startDate && task.endDate);
+            if (validTasks.length === 0) {
+                ganttStartDate = null;
+                ganttEndDate = null;
+                return;
+            }
             
-            calculateGanttDateRange();
-            updateDisplay();
-        } else {
-            document.getElementById('viewerProjectName').textContent = 'データが設定されていません';
-            document.getElementById('viewerClientInfo').textContent = '編集用ツールでURLを生成してください';
+            const startDates = validTasks.map(task => new Date(task.startDate));
+            const endDates = validTasks.map(task => new Date(task.endDate));
+            
+            ganttStartDate = new Date(Math.min(...startDates));
+            ganttEndDate = new Date(Math.max(...endDates));
+            
+            ganttStartDate.setDate(ganttStartDate.getDate() - 5);
+            ganttEndDate.setDate(ganttEndDate.getDate() + 10);
         }
-    }
-    
-    // 以下、既存の関数（togglePdfMode, calculateGanttDateRange, updateDisplay等）はそのまま維持
-    // ... 前回提供したviewer.htmlの既存コードをそのまま使用 ...
-</script>
-
+        
+        function updateDisplay() {
+            updateGanttChart();
+            updateStats();
+        }
+        
+        function updateGanttChart() {
+            const ganttTasksLeft = document.getElementById('ganttTasksLeft');
+            const ganttDatesHeader = document.getElementById('ganttDatesHeader');
+            const ganttTimelineArea = document.getElementById('ganttTimelineArea');
+            const ganttContent = document.getElementById('ganttContent');
+            
+            ganttTasksLeft.innerHTML = '';
+            ganttDatesHeader.innerHTML = '';
+            ganttTimelineArea.innerHTML = '';
+            
+            if (!ganttStartDate || !ganttEndDate) {
+                ganttTimelineArea.innerHTML = '<div style="padding: 20px; text-align: center; color: #6c757d;">スケジュールデータがありません</div>';
+                return;
+            }
+            
+            const totalDays = Math.floor((ganttEndDate - ganttStartDate) / (1000 * 60 * 60 * 24)) + 1;
+            const dayWidth = isPdfMode ? DAY_WIDTH_PDF : DAY_WIDTH;
+            const timelineWidth = totalDays * dayWidth;
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            
+            if (!isPdfMode) {
+                ganttContent.style.minWidth = (280 + timelineWidth) + 'px';
+            }
+            
+            // 左側のタスク名を生成
+            tasks.forEach(task => {
+                const taskNameDiv = document.createElement('div');
+                taskNameDiv.className = 'gantt-task-name';
+                if (task.isParallel) {
+                    taskNameDiv.classList.add('parallel');
+                }
+                if (isPdfMode) {
+                    taskNameDiv.classList.add('pdf-mode');
+                }
+                
+                const parallelIndicator = task.isParallel ? '🔗 ' : '';
+                
+                taskNameDiv.innerHTML = `
+                    <div style="line-height: 1.2;">
+                        <strong style="font-size: ${isPdfMode ? '8px' : '11px'};">${parallelIndicator}${task.name}</strong><br>
+                        <small style="color: #6c757d; font-size: ${isPdfMode ? '6px' : '9px'};">担当: ${task.assignee} (${task.duration}日)</small>
+                    </div>
+                `;
+                ganttTasksLeft.appendChild(taskNameDiv);
+            });
+            
+            // 日付ヘッダーを生成
+            let currentDate = new Date(ganttStartDate);
+            while (currentDate <= ganttEndDate) {
+                const dateCell = document.createElement('div');
+                dateCell.className = 'gantt-date-cell';
+                dateCell.style.width = dayWidth + 'px';
+                dateCell.style.minWidth = dayWidth + 'px';
+                
+                const dayOfWeek = currentDate.getDay();
+                if (dayOfWeek === 0 || dayOfWeek === 6) {
+                    dateCell.classList.add('weekend');
+                }
+                
+                if (currentDate.getTime() === today.getTime()) {
+                    dateCell.classList.add('today');
+                }
+                
+                const month = currentDate.getMonth() + 1;
+                const day = currentDate.getDate();
+                const weekdays = ['日', '月', '火', '水', '木', '金', '土'];
+                
+                if (isPdfMode) {
+                    dateCell.innerHTML = `${month}/${day}<br><span style="font-size: 5px;">${weekdays[dayOfWeek]}</span>`;
+                } else {
+                    dateCell.innerHTML = `${month}/${day}<br><span style="font-size: 8px;">${weekdays[dayOfWeek]}</span>`;
+                }
+                
+                ganttDatesHeader.appendChild(dateCell);
+                currentDate.setDate(currentDate.getDate() + 1);
+            }
+            
+            // タイムライン行を生成
+            tasks.forEach(task => {
+                const timelineRow = document.createElement('div');
+                timelineRow.className = 'gantt-timeline-row';
+                if (task.isParallel) {
+                    timelineRow.classList.add('parallel');
+                }
+                if (isPdfMode) {
+                    timelineRow.classList.add('pdf-mode');
+                }
+                timelineRow.style.width = timelineWidth + 'px';
+                
+                // 日付の縦線を描画
+                let lineDate = new Date(ganttStartDate);
+                let dayIndex = 0;
+                
+                while (lineDate <= ganttEndDate) {
+                    const dateLine = document.createElement('div');
+                    dateLine.className = 'gantt-date-line';
+                    if (isPdfMode) {
+                        dateLine.classList.add('pdf-mode');
+                    }
+                    dateLine.style.left = (dayIndex * dayWidth) + 'px';
+                    
+                    const dayOfWeek = lineDate.getDay();
+                    if (dayOfWeek === 0 || dayOfWeek === 6) {
+                        dateLine.classList.add('weekend');
+                        dateLine.style.width = dayWidth + 'px';
+                    }
+                    
+                    if (lineDate.getTime() === today.getTime()) {
+                        dateLine.classList.add('today');
+                    }
+                    
+                    timelineRow.appendChild(dateLine);
+                    lineDate.setDate(lineDate.getDate() + 1);
+                    dayIndex++;
+                }
+                
+                // タスクバーを描画
+                if (task.startDate && task.endDate) {
+                    const taskStart = new Date(task.startDate);
+                    const taskEnd = new Date(task.endDate);
+                    
+                    const startOffset = Math.floor((taskStart - ganttStartDate) / (1000 * 60 * 60 * 24));
+                    const barDuration = Math.floor((taskEnd - taskStart) / (1000 * 60 * 60 * 24)) + 1;
+                    
+                    const bar = document.createElement('div');
+                    bar.className = `gantt-bar ${getTaskClass(task.assignee)}`;
+                    if (task.completed) {
+                        bar.classList.add('completed');
+                    }
+                    if (isPdfMode) {
+                        bar.classList.add('pdf-mode');
+                    }
+                    
+                    const barLeft = startOffset * dayWidth + 1;
+                    const barWidth = Math.max(barDuration * dayWidth - 2, dayWidth - 2);
+                    
+                    bar.style.left = barLeft + 'px';
+                    bar.style.width = barWidth + 'px';
+                    
+                    if (isPdfMode) {
+                        if (barWidth > 20) {
+                            bar.textContent = `${task.duration}`;
+                        } else {
+                            bar.textContent = '';
+                        }
+                    } else {
+                        if (barWidth > 60) {
+                            bar.textContent = `${task.duration}日`;
+                        } else if (barWidth > 30) {
+                            bar.textContent = `${task.duration}`;
+                        } else {
+                            bar.textContent = '';
+                        }
+                    }
+                    
+                    bar.addEventListener('mouseenter', (e) => showTooltip(e, task));
+                    bar.addEventListener('mouseleave', hideTooltip);
+                    
+                    timelineRow.appendChild(bar);
+                }
+                
+                ganttTimelineArea.appendChild(timelineRow);
+            });
+            
+            if (!isPdfMode) {
+                syncScrolling();
+            }
+        }
+        
+        function syncScrolling() {
+            const ganttTasksLeft = document.getElementById('ganttTasksLeft');
+            const ganttTimelineArea = document.getElementById('ganttTimelineArea');
+            
+            ganttTasksLeft.addEventListener('scroll', function() {
+                ganttTimelineArea.scrollTop = this.scrollTop;
+            });
+            
+            ganttTimelineArea.addEventListener('scroll', function() {
+                ganttTasksLeft.scrollTop = this.scrollTop;
+            });
+        }
+        
+        function scrollGanttToStart() {
+            const wrapper = document.getElementById('ganttScrollWrapper');
+            wrapper.scrollLeft = 0;
+        }
+        
+        function scrollGanttToToday() {
+            if (!ganttStartDate) return;
+            
+            const today = new Date();
+            const daysDiff = Math.floor((today - ganttStartDate) / (1000 * 60 * 60 * 24));
+            const dayWidth = isPdfMode ? DAY_WIDTH_PDF : DAY_WIDTH;
+            const scrollPosition = Math.max(0, (daysDiff * dayWidth) - 200);
+            
+            const wrapper = document.getElementById('ganttScrollWrapper');
+            wrapper.scrollLeft = scrollPosition;
+        }
+        
+        function scrollGanttToEnd() {
+            const wrapper = document.getElementById('ganttScrollWrapper');
+            wrapper.scrollLeft = wrapper.scrollWidth;
+        }
+        
+        function getTaskClass(assignee) {
+            switch(assignee) {
+                case 'ST': return 'st-task';
+                case '貴社': return 'client-task';
+                case '貴社/ST': return 'both-task';
+                default: return 'st-task';
+            }
+        }
+        
+        function showTooltip(e, task) {
+            const tooltip = document.getElementById('tooltip');
+            const parallelStatus = task.isParallel ? '🔗 並列実行' : '📋 順次実行';
+            tooltip.innerHTML = `
+                <strong>${task.name}</strong><br>
+                担当者: ${task.assignee}<br>
+                期間: ${task.duration}日<br>
+                開始: ${task.startDate}<br>
+                終了: ${task.endDate}<br>
+                実行方式: ${parallelStatus}<br>
+                状態: ${task.completed ? '✅ 完了' : '⏳ 未完了'}
+            `;
+            tooltip.style.display = 'block';
+            tooltip.style.left = e.pageX + 10 + 'px';
+            tooltip.style.top = e.pageY - 10 + 'px';
+        }
+        
+        function hideTooltip() {
+            document.getElementById('tooltip').style.display = 'none';
+        }
+        
+        function updateStats() {
+            const totalTasks = tasks.length;
+            const completedTasks = tasks.filter(task => task.completed).length;
+            const totalDays = tasks.reduce((sum, task) => sum + task.duration, 0);
+            
+            const validEndDates = tasks.filter(t => t.endDate).map(t => new Date(t.endDate));
+            const projectEndDate = validEndDates.length > 0 ? 
+                           new Date(Math.max(...validEndDates)).toLocaleDateString('ja-JP') : '-';
+            
+            document.getElementById('totalTasks').textContent = totalTasks;
+            document.getElementById('completedTasks').textContent = completedTasks;
+            document.getElementById('totalDays').textContent = totalDays;
+            document.getElementById('projectEndDate').textContent = projectEndDate;
+        }
+        
+        document.addEventListener('DOMContentLoaded', init);
+        window.addEventListener('load', init);
+    </script>
 </body>
 </html>
